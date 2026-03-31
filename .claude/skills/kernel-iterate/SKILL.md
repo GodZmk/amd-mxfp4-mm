@@ -24,9 +24,12 @@ Parse the log to extract:
 - **STRATEGIES_TRIED**: all changes already attempted
 - **Last session summary**: what worked, what didn't, suggested next directions
 
-Also scan `submissions/` to find the latest snapshot version:
+Also scan `submissions/` to find the latest snapshot version and read the most recent session summary:
 ```bash
 ls submissions/ 2>/dev/null | sort
+# Read the latest session summary if present
+LATEST=$(ls submissions/ 2>/dev/null | sort | tail -1)
+cat submissions/${LATEST}/session_summary.md 2>/dev/null || true
 ```
 
 If `kernel_iterate_log.md` does not exist, create it with this header and treat CURRENT_ITER = 0, BEST_TFLOPS = unknown:
@@ -129,20 +132,36 @@ EOF
 - User's target reached
 - User says stop
 
-On stop, append a session summary block to `kernel_iterate_log.md`:
+On stop, write the session summary to **two places**:
 
+**1. A dedicated summary file** (versioned, human-readable):
+```bash
+mkdir -p submissions/submission_${LAST_ITER}
+cat > submissions/submission_${LAST_ITER}/session_summary.md << 'EOF'
+# Session Summary — v<LAST_ITER> — <date>
+
+**Version range**: submission_<FIRST_ITER_THIS_SESSION> → submission_<LAST_ITER>
+**Session TFLOPS**: <start_tflops> → <best_tflops_this_session> (<delta>%)
+
+**Experimental direction**: <one sentence>
+
+**Best result**: Iter <N> — <change> — <TFLOPS> TFLOPS (<latency>ms) ✓
+
+**What worked**: 
+- <change>: +X% TFLOPS
+
+**What didn't**:
+- <change>: reverted / no effect
+
+**Next directions**:
+- <suggested next steps>
+EOF
+```
+
+**2. Appended to `kernel_iterate_log.md`** (searchable history):
 ```markdown
-## Session Summary — <date>
-
-**Experimental direction**: <one sentence describing what was tried this session>
-
-**Best result**: Iter N — <change> — <TFLOPS> TFLOPS (<latency>ms) ✓
-
-**What worked**: <bullet list>
-
-**What didn't**: <bullet list>
-
-**Next directions**: <suggested next steps for future sessions>
+## Session Summary — v<LAST_ITER> — <date>
+...same content...
 ```
 
 Then print the full table from the log as the final output.
