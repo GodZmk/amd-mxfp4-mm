@@ -19,8 +19,8 @@ mkdir -p iterations
 ## Phase 1 — Establish Baseline
 
 ```bash
-popcorn run submission.py 2>&1 | tee /tmp/bench_baseline.txt
-python3 .popcorn/skills/kernel-iterate-parallel/scripts/parse_benchmark.py /tmp/bench_baseline.txt
+popcorn submit --mode benchmark --no-tui submission.py 2>&1 | tee /tmp/bench_baseline.txt
+python3 .claude/skills/kernel-iterate-parallel/scripts/parse_benchmark.py /tmp/bench_baseline.txt
 ```
 
 Initialize `kernel_iterate_log.md` header row if the file is empty:
@@ -91,7 +91,7 @@ Your task — follow these steps exactly:
 1. Read submission.py to understand the current kernel.
 
 2. Apply ONLY the "<strategy_id>" optimization (one focused change).
-   Reference: .popcorn/skills/kernel-iterate-parallel/references/triton-amd-opts.md
+   Reference: .claude/skills/kernel-iterate-parallel/references/triton-amd-opts.md
 
 3. Create the snapshot directory:
    mkdir -p iterations/iter_<N>_<strategy_id>
@@ -100,10 +100,10 @@ Your task — follow these steps exactly:
    Write your modified submission.py to: iterations/iter_<N>_<strategy_id>/submission.py
 
 5. Run the benchmark (source bashrc first if needed):
-   source /Users/zhumingkai/.bashrc 2>/dev/null; popcorn run iterations/iter_<N>_<strategy_id>/submission.py 2>&1 | tee /tmp/bench_<N>_<strategy_id>.txt
+   source /Users/zhumingkai/.bashrc 2>/dev/null; popcorn submit --mode benchmark --no-tui iterations/iter_<N>_<strategy_id>/submission.py 2>&1 | tee /tmp/bench_<N>_<strategy_id>.txt
 
 6. Parse the result:
-   python3 .popcorn/skills/kernel-iterate-parallel/scripts/parse_benchmark.py /tmp/bench_<N>_<strategy_id>.txt
+   python3 .claude/skills/kernel-iterate-parallel/scripts/parse_benchmark.py /tmp/bench_<N>_<strategy_id>.txt
 
 7. Save bench output:
    cp /tmp/bench_<N>_<strategy_id>.txt iterations/iter_<N>_<strategy_id>/bench_result.txt

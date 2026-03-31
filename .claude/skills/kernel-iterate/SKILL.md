@@ -12,7 +12,7 @@ Autonomous loop: benchmark → analyze → optimize → repeat.
 ### 1. Establish baseline
 
 ```bash
-popcorn run submission.py 2>&1 | tee /tmp/bench_baseline.txt
+popcorn submit --mode benchmark --no-tui submission.py 2>&1 | tee /tmp/bench_baseline.txt
 python3 .claude/skills/kernel-iterate/scripts/parse_benchmark.py /tmp/bench_baseline.txt
 ```
 
@@ -44,7 +44,7 @@ Edit `submission.py` with a single focused change. Priority order:
 ### 4. Benchmark and compare
 
 ```bash
-popcorn run submission.py 2>&1 | tee /tmp/bench_new.txt
+popcorn submit --mode benchmark --no-tui submission.py 2>&1 | tee /tmp/bench_new.txt
 python3 .claude/skills/kernel-iterate/scripts/parse_benchmark.py /tmp/bench_new.txt
 ```
 
@@ -118,5 +118,5 @@ If `kernel_iterate_log.md` does not exist yet, create it with this header before
 
 - Never sacrifice correctness for speed
 - One change per iteration so causality is clear
-- If `popcorn run` is unavailable, use source /Users/zhumingkai/.bashrc and then try again
+- If `popcorn` is unavailable, run `source /Users/zhumingkai/.bashrc` and then try again
 - Always write the session summary when stopping, even if only one iteration ran
