@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 .popcorn/skills/kernel-iterate-parallel/scripts/update_skill.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
