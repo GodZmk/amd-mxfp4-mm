@@ -5,30 +5,67 @@ description: Autonomous GPU kernel optimization loop for Popcorn leaderboard sub
 
 # Kernel Iterate
 
-Autonomous loop: benchmark → analyze → optimize → repeat.
+Autonomous loop: restore context → analyze → optimize → benchmark → save snapshot → log → repeat.
 
 ## Workflow
 
-### 1. Establish baseline
+### 1. Restore Context from Log
 
+**Always start here — never re-run a baseline benchmark if the log already exists.**
+
+```bash
+cat kernel_iterate_log.md 2>/dev/null || echo "No log yet"
+```
+
+Parse the log to extract:
+- **CURRENT_ITER**: highest iter number seen (next iteration = CURRENT_ITER + 1)
+- **BEST_TFLOPS**: highest TFLOPS in any passing row
+- **BEST_ITER**: which iter produced best TFLOPS
+- **STRATEGIES_TRIED**: all changes already attempted
+- **Last session summary**: what worked, what didn't, suggested next directions
+
+Also scan `submissions/` to find the latest snapshot version:
+```bash
+ls submissions/ 2>/dev/null | sort
+```
+
+If `kernel_iterate_log.md` does not exist, create it with this header and treat CURRENT_ITER = 0, BEST_TFLOPS = unknown:
+
+```markdown
+# Kernel Iterate Log — <submission name>
+
+| Iter | Change | TFLOPS | Latency | Pass |
+|------|--------|--------|---------|------|
+```
+
+Then run a single baseline benchmark to establish the starting point:
 ```bash
 popcorn submit --mode benchmark --no-tui submission.py 2>&1 | tee /tmp/bench_baseline.txt
 python3 .claude/skills/kernel-iterate/scripts/parse_benchmark.py /tmp/bench_baseline.txt
 ```
 
-Record TFLOPS, latency_ms, correctness. This is the target to beat.
+Append baseline row to log:
+```
+| 0 | baseline | <tflops> | <latency>ms | ✓/✗ |
+```
 
-### 2. Analyze bottleneck
+---
 
-Read `submission.py` and classify:
+### 2. Analyze Bottleneck
+
+Read `submission.py` and the last session summary from the log. Classify current state:
 
 - **Memory-bound**: low arithmetic intensity → increase tile size, vectorize loads
 - **Compute-bound**: near peak TFLOPS → reduce overhead, check packing
 - **Correctness failure**: wrong output → check nibble order, E8M0 bias, scale application
 
-Read `references/triton-amd-opts.md` for the relevant fix pattern.
+Read `.claude/skills/kernel-iterate/references/triton-amd-opts.md` for the relevant fix pattern.
 
-### 3. Apply one targeted optimization
+Cross-check against `STRATEGIES_TRIED` — do not repeat a strategy that already failed or had no effect.
+
+---
+
+### 3. Apply One Targeted Optimization
 
 Edit `submission.py` with a single focused change. Priority order:
 
@@ -41,16 +78,48 @@ Edit `submission.py` with a single focused change. Priority order:
 | 5 | `@triton.autotune` over tile configs |
 | 6 | Wave32 mode or `num_warps` tuning |
 
-### 4. Benchmark and compare
+---
+
+### 4. Save Submission Snapshot
+
+Before benchmarking, save the current code as a versioned snapshot:
 
 ```bash
-popcorn submit --mode benchmark --no-tui submission.py 2>&1 | tee /tmp/bench_new.txt
-python3 .claude/skills/kernel-iterate/scripts/parse_benchmark.py /tmp/bench_new.txt
+ITER=<current_iter_number>
+mkdir -p submissions/submission_${ITER}
+cp submission.py submissions/submission_${ITER}/submission.py
+echo "<brief description of change>" > submissions/submission_${ITER}/notes.txt
 ```
 
-Compare vs previous best. If correctness regressed, revert and try a different change.
+---
 
-### 5. Decide: continue or stop
+### 5. Benchmark and Compare
+
+```bash
+popcorn submit --mode benchmark --no-tui submission.py 2>&1 | tee /tmp/bench_iter${ITER}.txt
+python3 .claude/skills/kernel-iterate/scripts/parse_benchmark.py /tmp/bench_iter${ITER}.txt
+```
+
+Compare vs `BEST_TFLOPS`. If correctness regressed, revert `submission.py` from the previous snapshot and try a different change:
+```bash
+cp submissions/submission_${PREV_ITER}/submission.py submission.py
+```
+
+---
+
+### 6. Update Log
+
+Append a row to `kernel_iterate_log.md`:
+
+```bash
+cat >> kernel_iterate_log.md << 'EOF'
+| <N> | <change description> | <tflops> | <latency>ms | ✓/✗ |
+EOF
+```
+
+---
+
+### 7. Decide: Continue or Stop
 
 **Continue** if: TFLOPS improved AND correctness passes AND more optimizations remain.
 
@@ -60,30 +129,7 @@ Compare vs previous best. If correctness regressed, revert and try a different c
 - User's target reached
 - User says stop
 
-Print a summary table of all iterations when stopping.
-
-## Iteration Log (keep in memory AND persist to file)
-
-```
-| Iter | Change | TFLOPS | Latency | Pass |
-|------|--------|--------|---------|------|
-| 0    | baseline | --   | --      | ?    |
-```
-
-### Log file: `kernel_iterate_log.md`
-
-At the **start** of each session: read `kernel_iterate_log.md` if it exists to restore prior context.
-
-After **each iteration**: append a row to the log file:
-
-```bash
-# Append iteration row (example)
-cat >> kernel_iterate_log.md << 'EOF'
-| 1 | Increase BLOCK_M 64→128 | 12.3 | 4.2ms | ✓ |
-EOF
-```
-
-At the **end** of the session (stop condition reached): append a session summary block:
+On stop, append a session summary block to `kernel_iterate_log.md`:
 
 ```markdown
 ## Session Summary — <date>
@@ -92,27 +138,23 @@ At the **end** of the session (stop condition reached): append a session summary
 
 **Best result**: Iter N — <change> — <TFLOPS> TFLOPS (<latency>ms) ✓
 
-**What worked**: <bullet list of changes that improved performance>
+**What worked**: <bullet list>
 
-**What didn't**: <bullet list of changes that were reverted or had no effect>
+**What didn't**: <bullet list>
 
 **Next directions**: <suggested next steps for future sessions>
 ```
 
-If `kernel_iterate_log.md` does not exist yet, create it with this header before the first iteration:
+Then print the full table from the log as the final output.
 
-```markdown
-# Kernel Iterate Log — <submission name>
-
-| Iter | Change | TFLOPS | Latency | Pass |
-|------|--------|--------|---------|------|
-```
+---
 
 ## References
 
-- **AMD Triton opts**: `references/triton-amd-opts.md` — read at start of each iteration
-- **Benchmark parser**: `scripts/parse_benchmark.py` — pipe popcorn output through this
-- **Iteration log**: `kernel_iterate_log.md` in the working directory
+- **AMD Triton opts**: `.claude/skills/kernel-iterate/references/triton-amd-opts.md`
+- **Benchmark parser**: `.claude/skills/kernel-iterate/scripts/parse_benchmark.py`
+- **Iteration log**: `kernel_iterate_log.md`
+- **Snapshots**: `submissions/submission_<N>/`
 
 ## Constraints
 
@@ -120,3 +162,4 @@ If `kernel_iterate_log.md` does not exist yet, create it with this header before
 - One change per iteration so causality is clear
 - If `popcorn` is unavailable, run `source /Users/zhumingkai/.bashrc` and then try again
 - Always write the session summary when stopping, even if only one iteration ran
+- Always save a snapshot before benchmarking — snapshots are the only way to revert
