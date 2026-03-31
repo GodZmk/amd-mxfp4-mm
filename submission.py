@@ -40,7 +40,6 @@ def _mxfp4_quant_kernel(
     # E8M0 scale: match reference _mxfp4_quant_op (aiter/ops/triton/_triton_kernels/quant/quant.py)
     abs_max = tl.maximum(tl.max(tl.abs(x_even), axis=0),
                          tl.max(tl.abs(x_odd),  axis=0))
-    abs_max = tl.maximum(abs_max, 1e-38)
 
     # Match reference _mxfp4_quant_op scale exactly via bitwise rounding
     abs_max = tl.maximum(abs_max, 1e-38).to(tl.float32)
@@ -53,33 +52,48 @@ def _mxfp4_quant_kernel(
 
     tl.store(scale_ptr + row * (K // GROUP_SIZE) + group_id, e8m0_exp)
 
-    # Quantize even elements -> lo nibbles
-    # Threshold-based nearest-value rounding for E2M1 magnitudes:
-    # 0->0, 1->0.5, 2->1.0, 3->1.5, 4->2.0, 5->3.0, 6->4.0, 7->6.0
-    xs_e = x_even * quant_scale
-    abs_e = tl.abs(xs_e)
-    sign_e = tl.where(xs_e < 0, 1, 0)
-    q_e = tl.where(abs_e < 0.25, 0,
-          tl.where(abs_e < 0.75, 1,
-          tl.where(abs_e < 1.25, 2,
-          tl.where(abs_e < 1.75, 3,
-          tl.where(abs_e < 2.5,  4,
-          tl.where(abs_e < 3.5,  5,
-          tl.where(abs_e < 5.0,  6, 7)))))))
-    lo = (q_e | (sign_e << 3)) & 0xF
+    # E2M1 bit-manipulation encoding matching ROCm/aiter _mxfp4_quant_op exactly
+    # val_to_add = ((EXP_BIAS_FP4 - EXP_BIAS_FP32) << MBITS_F32) + (1 << (MBITS_F32 - MBITS_FP4 - 1)) - 1
+    # = ((1 - 127) << 23) + (1 << 21) - 1 = -1056964608 + 2097152 - 1 = -1054867457
+    # DENORM_MASK_INT = 149 << 23 = 0x4A800000; as float = 2^22 = 4194304.0
 
-    # Quantize odd elements -> hi nibbles
+    # Even elements -> lo nibbles
+    xs_e = x_even * quant_scale
+    xs_e_uint = xs_e.to(tl.int32, bitcast=True).to(tl.uint32)
+    s_e = xs_e_uint & 0x80000000
+    xs_e_pos_uint = xs_e_uint ^ s_e
+    xs_e_pos = xs_e_pos_uint.to(tl.float32, bitcast=True)
+    sat_e = xs_e_pos >= 6.0
+    den_e = xs_e_pos < 1.0
+    mant_odd_e = (xs_e_pos_uint >> 22) & 1
+    norm_e = ((xs_e_pos_uint.to(tl.int32) + (-1054867457)) + mant_odd_e.to(tl.int32)) >> 22
+    norm_e = norm_e.to(tl.uint8)
+    den_val_e = (xs_e_pos + 4194304.0).to(tl.int32, bitcast=True) - 0x4A800000
+    den_val_e = den_val_e.to(tl.uint8)
+    q_e = tl.full(xs_e.shape, 7, dtype=tl.uint8)
+    q_e = tl.where(~sat_e, norm_e, q_e)
+    q_e = tl.where(den_e, den_val_e, q_e)
+    sign_e_lp = (s_e >> 28).to(tl.uint8)
+    lo = (q_e | sign_e_lp) & 0xF
+
+    # Odd elements -> hi nibbles
     xs_o = x_odd * quant_scale
-    abs_o = tl.abs(xs_o)
-    sign_o = tl.where(xs_o < 0, 1, 0)
-    q_o = tl.where(abs_o < 0.25, 0,
-          tl.where(abs_o < 0.75, 1,
-          tl.where(abs_o < 1.25, 2,
-          tl.where(abs_o < 1.75, 3,
-          tl.where(abs_o < 2.5,  4,
-          tl.where(abs_o < 3.5,  5,
-          tl.where(abs_o < 5.0,  6, 7)))))))
-    hi = ((q_o | (sign_o << 3)) & 0xF) << 4
+    xs_o_uint = xs_o.to(tl.int32, bitcast=True).to(tl.uint32)
+    s_o = xs_o_uint & 0x80000000
+    xs_o_pos_uint = xs_o_uint ^ s_o
+    xs_o_pos = xs_o_pos_uint.to(tl.float32, bitcast=True)
+    sat_o = xs_o_pos >= 6.0
+    den_o = xs_o_pos < 1.0
+    mant_odd_o = (xs_o_pos_uint >> 22) & 1
+    norm_o = ((xs_o_pos_uint.to(tl.int32) + (-1054867457)) + mant_odd_o.to(tl.int32)) >> 22
+    norm_o = norm_o.to(tl.uint8)
+    den_val_o = (xs_o_pos + 4194304.0).to(tl.int32, bitcast=True) - 0x4A800000
+    den_val_o = den_val_o.to(tl.uint8)
+    q_o = tl.full(xs_o.shape, 7, dtype=tl.uint8)
+    q_o = tl.where(~sat_o, norm_o, q_o)
+    q_o = tl.where(den_o, den_val_o, q_o)
+    sign_o_lp = (s_o >> 28).to(tl.uint8)
+    hi = ((q_o | sign_o_lp) & 0xF) << 4
 
     # Pack two FP4 nibbles per byte: lo nibble = even index, hi nibble = odd index
     packed = lo | hi
