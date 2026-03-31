@@ -1,0 +1,3 @@
+__pycache__/
+*.pyc
+.claude/skills/kernel-iterate-parallel/scripts/.last_update_state.json
